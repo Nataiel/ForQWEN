@@ -1,252 +1,130 @@
-"""
-Скрипт для парсинга таблиц с сайта с авторизацией.
-Маскируется под обычного пользователя браузера.
-"""
-
 import requests
-from bs4 import BeautifulSoup
 import time
 import random
+from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
+from typing import Dict, Any, List, Optional, Callable
+from functools import reduce
 
-# Генерируем реалистичный User-Agent
-ua = UserAgent()
-HEADERS = {
-    'User-Agent': ua.random,
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
-    'Cache-Control': 'max-age=0',
+# --- Конфигурация (Данные) ---
+CONFIG = {
+    "login_url": "http://school65.ru/Auth.aspx?refererurl=http%3a%2f%2fschool65.ru%2fdefault.aspx",
+    "data_url": "http://school65.ru/tables",
+    "username": "seggiy@mail.ru",
+    "password": "School6565",
+    "delay_range": (2, 5),  # Случайная задержка между действиями
 }
 
+# --- Утилиты (Чистые функции) ---
 
-class WebsiteScraper:
-    """Класс для сбора данных с сайта с маскировкой под браузер."""
+def random_delay(min_sec: int, max_sec: int) -> float:
+    """Генерирует случайную задержку для имитации человека."""
+    delay = random.uniform(min_sec, max_sec)
+    time.sleep(delay)
+    return delay
+
+def generate_headers() -> Dict[str, str]:
+    """Создает заголовки, имитирующие реальный браузер."""
+    ua = UserAgent()
+    return {
+        "User-Agent": ua.random,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0",
+    }
+
+def build_login_payload(username: str, password: str) -> Dict[str, str]:
+    """Формирует полезную нагрузку для входа."""
+    # Примечание: имена полей 'username' и 'password' нужно заменить на реальные из формы сайта
+    return {
+        "login": username,
+        "passwordHash": password,
+        "submit": "Login"
+    }
+
+# --- Логика работы с сетью (Функции высшего порядка и трансформеры) ---
+
+def create_session() -> requests.Session:
+    """Создает новую сессию."""
+    return requests.Session()
+
+def perform_login(session: requests.Session, url: str, payload: Dict[str, str], headers: Dict[str, str]) -> requests.Session:
+    """Выполняет вход и возвращает обновленную сессию (с куками)."""
+    print(f"[INFO] Попытка входа на {url}...")
+    response = session.post(url, data=payload, headers=headers)
     
-    def __init__(self, login_url, data_url):
-        """
-        Инициализация скрепера.
-        
-        Args:
-            login_url: URL страницы авторизации
-            data_url: URL страницы с таблицами
-        """
-        self.login_url = login_url
-        self.data_url = data_url
-        self.session = requests.Session()
-        self.session.headers.update(HEADERS)
+    # Простая проверка успеха (можно усложнить проверкой наличия конкретного элемента в ответе)
+    if response.status_code == 200 and "logout" in response.text.lower():
+        print("[SUCCESS] Авторизация успешна.")
+    else:
+        print(f"[WARNING] Статус ответа: {response.status_code}. Возможно, вход не удался или сайт требует JS.")
     
-    def human_delay(self, min_seconds=1, max_seconds=3):
-        """Добавляет случайную задержку как у реального пользователя."""
-        delay = random.uniform(min_seconds, max_seconds)
-        time.sleep(delay)
+    return session
+
+def fetch_data(session: requests.Session, url: str, headers: Dict[str, str]) -> str:
+    """Загружает содержимое страницы с данными."""
+    print(f"[INFO] Загрузка данных с {url}...")
+    response = session.get(url, headers=headers)
+    response.raise_for_status()
+    return response.text
+
+def parse_tables(html_content: str) -> List[List[str]]:
+    """Парсит HTML и извлекает таблицы в виде списка списков."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    tables = []
     
-    def login(self, username, password, additional_data=None):
-        """
-        Выполняет авторизацию на сайте.
-        
-        Args:
-            username: Логин пользователя
-            password: Пароль
-            additional_data: Дополнительные данные для формы входа
-        
-        Returns:
-            bool: True если авторизация успешна
-        """
-        # Данные для отправки (нужно адаптировать под конкретный сайт)
-        login_data = {
-            'username': username,
-            'password': password,
-        }
-        
-        if additional_data:
-            login_data.update(additional_data)
-        
-        print(f"[*] Выполняем вход на {self.login_url}...")
-        print(f"[*] Используем User-Agent: {self.session.headers['User-Agent']}")
-        
-        # Имитируем задержку перед отправкой формы
-        self.human_delay(2, 4)
-        
-        response = self.session.post(
-            self.login_url,
-            data=login_data,
-            allow_redirects=True
-        )
-        
-        # Проверяем успешность входа (нужно адаптировать под сайт)
-        if response.status_code == 200:
-            print("[+] Авторизация прошла успешно!")
-            return True
-        else:
-            print(f"[-] Ошибка авторизации. Код ответа: {response.status_code}")
-            return False
-    
-    def get_tables(self):
-        """
-        Получает таблицы с защищенной страницы.
-        
-        Returns:
-            list: Список найденных таблиц
-        """
-        print(f"[*] Загружаем страницу с таблицами: {self.data_url}")
-        
-        # Имитируем задержку как у человека
-        self.human_delay(1, 3)
-        
-        response = self.session.get(self.data_url)
-        
-        if response.status_code != 200:
-            print(f"[-] Ошибка загрузки страницы. Код: {response.status_code}")
-            return []
-        
-        # Парсим HTML
-        soup = BeautifulSoup(response.text, 'html.parser')
-        tables = soup.find_all('table')
-        
-        print(f"[+] Найдено таблиц: {len(tables)}")
-        
-        return tables
-    
-    def save_table_to_csv(self, table, filename='table.csv'):
-        """Сохраняет таблицу в CSV файл."""
-        import csv
-        
+    for table in soup.find_all("table"):
         rows = []
-        for tr in table.find_all('tr'):
-            row = [td.get_text(strip=True) for td in tr.find_all(['td', 'th'])]
-            if row:
-                rows.append(row)
-        
-        with open(filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerows(rows)
-        
-        print(f"[+] Таблица сохранена в {filename}")
+        for tr in table.find_all("tr"):
+            cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+            if cols:
+                rows.append(cols)
+        if rows:
+            tables.append(rows)
+            
+    return tables
 
+# --- Композиция (Основной поток) ---
 
-# ============================================================================
-# АльтЕРНАТИВА: Использование Selenium для полной эмуляции браузера
-# (если сайт использует много JavaScript)
-# ============================================================================
-
-def scrape_with_selenium(login_url, username, password, data_url):
+def run_pipeline(config: Dict[str, Any]) -> List[List[str]]:
     """
-    Парсинг с использованием Selenium - полная эмуляция браузера.
-    Требует установки: pip install selenium webdriver-manager
+    Основная функция-конвейер.
+    Связывает все этапы вместе в функциональном стиле.
     """
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
-    from webdriver_manager.chrome import ChromeDriverManager
-    import time
+    # Этап 1: Подготовка окружения
+    headers = generate_headers()
+    session = create_session()
     
-    # Настройки Chrome для маскировки
-    chrome_options = Options()
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    chrome_options.add_argument(f"user-agent={ua.random}")
+    # Этап 2: Авторизация
+    # Имитируем задержку перед действием
+    random_delay(*config["delay_range"])
     
-    # Создаем драйвер
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=chrome_options
-    )
+    payload = build_login_payload(config["username"], config["password"])
+    authenticated_session = perform_login(session, config["login_url"], payload, headers)
     
+    # Этап 3: Получение данных
+    random_delay(*config["delay_range"])
+    html_content = fetch_data(authenticated_session, config["data_url"], headers)
+    
+    # Этап 4: Парсинг
+    tables = parse_tables(html_content)
+    
+    return tables
+
+if __name__ == "__main__":
     try:
-        # Скрываем признак автоматизации
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        # Запуск конвейера
+        result_tables = run_pipeline(CONFIG)
         
-        print(f"[*] Открываем страницу входа: {login_url}")
-        driver.get(login_url)
-        
-        # Имитируем задержку человека
-        time.sleep(random.uniform(2, 4))
-        
-        # Заполняем форму (селекторы нужно адаптировать под сайт)
-        username_field = driver.find_element(By.NAME, "username")
-        password_field = driver.find_element(By.NAME, "password")
-        
-        # Печатаем с задержкой как человек
-        for char in username:
-            username_field.send_keys(char)
-            time.sleep(random.uniform(0.05, 0.15))
-        
-        time.sleep(random.uniform(0.5, 1))
-        
-        for char in password:
-            password_field.send_keys(char)
-            time.sleep(random.uniform(0.05, 0.15))
-        
-        time.sleep(random.uniform(1, 2))
-        
-        # Отправляем форму
-        password_field.submit()
-        
-        print("[+] Форма отправлена, ждем загрузки...")
-        time.sleep(random.uniform(3, 5))
-        
-        # Переходим к данным
-        driver.get(data_url)
-        time.sleep(random.uniform(2, 4))
-        
-        # Получаем HTML
-        html = driver.page_source
-        soup = BeautifulSoup(html, 'html.parser')
-        tables = soup.find_all('table')
-        
-        print(f"[+] Найдено таблиц: {len(tables)}")
-        
-        return tables
-        
-    finally:
-        driver.quit()
-
-
-# ============================================================================
-# ПРИМЕР ИСПОЛЬЗОВАНИЯ
-# ============================================================================
-
-if __name__ == '__main__':
-    # ЗАМЕНИТЕ НА ДАННЫЕ ВАШЕГО САЙТА
-    LOGIN_URL = 'https://example.com/login'
-    DATA_URL = 'https://example.com/tables'
-    USERNAME = 'your_username'
-    PASSWORD = 'your_password'
-    
-    print("=" * 60)
-    print("СКРЕПЕР ТАБЛИЦ С АВТОРИЗАЦИЕЙ")
-    print("=" * 60)
-    
-    # Вариант 1: Использование requests (быстрее, но не работает с JS)
-    scraper = WebsiteScraper(LOGIN_URL, DATA_URL)
-    
-    # Вход на сайт
-    if scraper.login(USERNAME, PASSWORD):
-        # Получение таблиц
-        tables = scraper.get_tables()
-        
-        # Сохранение первой таблицы
-        if tables:
-            scraper.save_table_to_csv(tables[0], 'result.csv')
-    
-    print("\n" + "=" * 60)
-    print("ПРИМЕЧАНИЯ ПО МАСКИРОВКЕ:")
-    print("=" * 60)
-    print("""
-1. User-Agent - меняется на случайный браузер
-2. Заголовки - как у настоящего браузера
-3. Задержки - случайные паузы между действиями
-4. Сессия - cookies сохраняются как в браузере
-5. Для сайтов с JS используйте Selenium вариант
-
-ВАЖНО: 
-- Изучите robots.txt сайта перед парсингом
-- Соблюдайте правила использования сайта
-- Не делайте слишком частые запросы
-- Уважайте нагрузку на сервер
-    """)
+        # Вывод результата
+        print(f"\n[RESULT] Найдено таблиц: {len(result_tables)}")
+        for i, table in enumerate(result_tables):
+            print(f"--- Таблица {i+1} (первые 3 строки) ---")
+            for row in table[:3]:
+                print(row)
+                
+    except Exception as e:
+        print(f"[ERROR] Произошла ошибка: {e}")
