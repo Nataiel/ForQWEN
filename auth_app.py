@@ -7,9 +7,10 @@
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import threading
 import time
+import os
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -31,6 +32,8 @@ password_entry = None
 login_button = None
 status_label = None
 root_window = None
+links_file_entry = None
+save_folder_entry = None
 
 
 def create_driver():
@@ -109,11 +112,13 @@ def update_status(message):
 
 
 def perform_login():
-    """Выполнение авторизации через браузер"""
+    """Выполнение авторизации через браузер с последующим скачиванием файлов"""
     global driver
     
     login = login_entry.get().strip()
     password = password_entry.get()
+    links_file = links_file_entry.get().strip()
+    save_folder = save_folder_entry.get().strip()
     
     if not login:
         update_status("Ошибка: Введите логин")
@@ -123,6 +128,35 @@ def perform_login():
     if not password:
         update_status("Ошибка: Введите пароль")
         messagebox.showerror("Ошибка", "Введите пароль")
+        return
+    
+    # Загрузка списка ссылок
+    links = []
+    if links_file and os.path.exists(links_file):
+        try:
+            with open(links_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and line.startswith('http'):
+                        links.append(line)
+            update_status(f"Загружено {len(links)} ссылок из файла")
+        except Exception as e:
+            messagebox.showerror("Ошибка чтения файла", f"Не удалось прочитать файл ссылок:\n{str(e)}")
+            return
+    elif links_file:
+        messagebox.showwarning("Предупреждение", f"Файл с ссылками не найден:\n{links_file}")
+        return
+    
+    # Проверка папки для сохранения
+    if save_folder and not os.path.exists(save_folder):
+        try:
+            os.makedirs(save_folder)
+            update_status(f"Создана папка для сохранения: {save_folder}")
+        except Exception as e:
+            messagebox.showerror("Ошибка создания папки", f"Не удалось создать папку:\n{str(e)}")
+            return
+    elif not save_folder and links:
+        messagebox.showwarning("Предупреждение", "Указаны ссылки для скачивания, но не выбрана папка для сохранения")
         return
     
     update_status("Запуск браузера...")
@@ -183,13 +217,17 @@ def perform_login():
         # Успешный вход - редирект на другую страницу или появление элементов личного кабинета
         if '/users/sign_in' not in current_url and ('выйти' in page_source or 'logout' in page_source):
             update_status("✓ Успешная авторизация!")
-            messagebox.showinfo("Успех", "Авторизация выполнена успешно!\nБраузер открыт с вашей сессией.")
             
-            # Если не нужно закрывать браузер, оставляем его открытым
+            # Скачивание файлов по ссылкам
+            if links and save_folder:
+                download_files(links, save_folder, wait)
+            
             if not keep_browser_var.get():
                 time.sleep(3)
                 driver.quit()
                 driver = None
+            else:
+                messagebox.showinfo("Успех", "Авторизация выполнена успешно!\nБраузер открыт с вашей сессией.")
         else:
             # Проверка на ошибку авторизации
             if 'неверный' in page_source or 'ошибка' in page_source or 'логин' in page_source:
@@ -236,6 +274,77 @@ def perform_login():
         login_button.config(state=tk.NORMAL)
 
 
+def download_files(links, save_folder, wait):
+    """Скачивание файлов по списку ссылок с эмуляцией действий пользователя"""
+    update_status(f"Начало скачивания {len(links)} файлов...")
+    
+    for i, link in enumerate(links, 1):
+        try:
+            update_status(f"Скачивание файла {i}/{len(links)}...")
+            
+            # Переход по ссылке с случайной задержкой
+            time.sleep(random.uniform(1.0, 2.5))
+            driver.get(link)
+            
+            # Ждем загрузки страницы
+            time.sleep(random.uniform(1.0, 2.0))
+            
+            # Попытка найти кнопку скачивания (если есть на странице)
+            # Ищем различные варианты кнопок скачивания
+            download_selectors = [
+                "a[href*='download']",
+                "button[class*='download']",
+                "input[value*='Скачать']",
+                "input[value*='Download']",
+                ".download-btn",
+                "#download-button"
+            ]
+            
+            for selector in download_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elements:
+                        if elem.is_displayed() and elem.is_enabled():
+                            # Клик по кнопке скачивания с эмуляцией человека
+                            driver.execute_script("arguments[0].scrollIntoView(true);", elem)
+                            time.sleep(random.uniform(0.3, 0.7))
+                            elem.click()
+                            update_status(f"Клик по кнопке скачивания для файла {i}")
+                            break
+                except:
+                    continue
+            
+            # Если это прямая ссылка на файл, браузер начнет скачивание автоматически
+            # Ждем некоторое время для начала загрузки
+            time.sleep(random.uniform(2.0, 4.0))
+            
+        except Exception as e:
+            update_status(f"Ошибка при скачивании файла {i}: {str(e)}")
+            continue
+    
+    update_status(f"✓ Скачивание завершено! Файлы сохранены в: {save_folder}")
+    messagebox.showinfo("Завершено", f"Скачивание {len(links)} файлов завершено!\nПапка сохранения: {save_folder}")
+
+
+def select_links_file():
+    """Выбор файла со ссылками"""
+    filename = filedialog.askopenfilename(
+        title="Выберите файл со ссылками",
+        filetypes=[("Текстовые файлы", "*.txt"), ("Все файлы", "*.*")]
+    )
+    if filename:
+        links_file_entry.delete(0, tk.END)
+        links_file_entry.insert(0, filename)
+
+
+def select_save_folder():
+    """Выбор папки для сохранения файлов"""
+    folder = filedialog.askdirectory(title="Выберите папку для сохранения файлов")
+    if folder:
+        save_folder_entry.delete(0, tk.END)
+        save_folder_entry.insert(0, folder)
+
+
 def start_login(event=None):
     """Запуск авторизации в отдельном потоке"""
     thread = threading.Thread(target=perform_login, daemon=True)
@@ -246,36 +355,37 @@ def create_widgets(root):
     """Создание элементов интерфейса"""
     global login_entry, password_entry, login_button, status_label
     global remember_var, keep_browser_var, root_window
+    global links_file_entry, save_folder_entry
     
     root_window = root
     
     # Заголовок
     title_label = tk.Label(
         root, 
-        text="РБД 2026 - Авторизация", 
-        font=("Arial", 16, "bold"),
+        text="РБД 2026 - Авторизация и скачивание", 
+        font=("Arial", 14, "bold"),
         pady=10
     )
     title_label.pack()
     
     # Фрейм для полей ввода
-    form_frame = ttk.Frame(root, padding=20)
+    form_frame = ttk.Frame(root, padding=10)
     form_frame.pack(fill=tk.BOTH, expand=True)
     
     # Поле логина
     login_label = ttk.Label(form_frame, text="Логин или имя пользователя:")
-    login_label.grid(row=0, column=0, sticky=tk.W, pady=5)
+    login_label.grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=5)
     
-    login_entry = ttk.Entry(form_frame, width=40)
-    login_entry.grid(row=1, column=0, pady=5, ipady=5)
+    login_entry = ttk.Entry(form_frame, width=50)
+    login_entry.grid(row=1, column=0, columnspan=3, pady=5, ipady=5, sticky=tk.W)
     login_entry.focus()
     
     # Поле пароля
     password_label = ttk.Label(form_frame, text="Пароль:")
-    password_label.grid(row=2, column=0, sticky=tk.W, pady=5)
+    password_label.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=5)
     
-    password_entry = ttk.Entry(form_frame, width=40, show="*")
-    password_entry.grid(row=3, column=0, pady=5, ipady=5)
+    password_entry = ttk.Entry(form_frame, width=50, show="*")
+    password_entry.grid(row=3, column=0, columnspan=3, pady=5, ipady=5, sticky=tk.W)
     
     # Чекбокс "Запомнить меня"
     remember_var = tk.BooleanVar(value=False)
@@ -293,16 +403,50 @@ def create_widgets(root):
         text="Не закрывать браузер после входа", 
         variable=keep_browser_var
     )
-    keep_browser_check.grid(row=5, column=0, sticky=tk.W, pady=5)
+    keep_browser_check.grid(row=4, column=1, columnspan=2, sticky=tk.W, pady=5)
+    
+    # Разделитель
+    separator1 = ttk.Separator(form_frame, orient='horizontal')
+    separator1.grid(row=5, column=0, columnspan=3, sticky='ew', pady=15)
+    
+    # Файл со ссылками
+    links_label = ttk.Label(form_frame, text="Файл со ссылками (.txt):")
+    links_label.grid(row=6, column=0, sticky=tk.W, pady=5)
+    
+    links_file_entry = ttk.Entry(form_frame, width=40)
+    links_file_entry.grid(row=7, column=0, columnspan=2, pady=5, ipady=5, sticky=tk.W)
+    
+    browse_links_btn = ttk.Button(
+        form_frame, 
+        text="Обзор...", 
+        command=select_links_file,
+        width=10
+    )
+    browse_links_btn.grid(row=7, column=2, pady=5, padx=(5, 0))
+    
+    # Папка для сохранения
+    folder_label = ttk.Label(form_frame, text="Папка для сохранения:")
+    folder_label.grid(row=8, column=0, sticky=tk.W, pady=5)
+    
+    save_folder_entry = ttk.Entry(form_frame, width=40)
+    save_folder_entry.grid(row=9, column=0, columnspan=2, pady=5, ipady=5, sticky=tk.W)
+    
+    browse_folder_btn = ttk.Button(
+        form_frame, 
+        text="Обзор...", 
+        command=select_save_folder,
+        width=10
+    )
+    browse_folder_btn.grid(row=9, column=2, pady=5, padx=(5, 0))
     
     # Кнопка входа
     login_button = ttk.Button(
         form_frame, 
-        text="Войти", 
+        text="Войти и скачать", 
         command=start_login,
         width=20
     )
-    login_button.grid(row=6, column=0, pady=20)
+    login_button.grid(row=10, column=0, columnspan=3, pady=20)
     
     # Статус бар
     status_label = ttk.Label(
@@ -323,7 +467,7 @@ def main():
     
     root = tk.Tk()
     root.title("Авторизация РБД 2026")
-    root.geometry("450x400")
+    root.geometry("600x500")
     root.resizable(False, False)
     
     # Установка иконки (если есть)
